@@ -175,6 +175,7 @@
   "__firefox__browser_specific_settings": {
     "gecko": {
       "id": "irev-vaultwarden@irevolution.group",
+      "update_url": "https://raw.githubusercontent.com/utilink-consulting/irev-vaultwarden-extension/main/deploy/firefox-updates.json",
       "strict_min_version": "91.0"
     }
   },

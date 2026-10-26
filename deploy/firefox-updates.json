@@ -3,9 +3,9 @@
     "irev-vaultwarden@irevolution.group": {
       "updates": [
         {
-          "version": "2026.10.1",
-          "update_link": "https://github.com/utilink-consulting/irev-vaultwarden-extension/releases/download/v2026.10.1/irev-vaultwarden-2026.10.1-firefox.xpi",
-          "update_hash": "sha256:e84e600c187ab830db13cb187d63a5b79e61775a9b931a45e7534734aa2f72a4"
+          "version": "2026.10.2",
+          "update_link": "https://github.com/utilink-consulting/irev-vaultwarden-extension/releases/download/v2026.10.2/irev-vaultwarden-2026.10.2-firefox.xpi",
+          "update_hash": "sha256:44850104a13a17299bf31c4d1610dcc203954f909fb347a4c8522230a47bac57"
         }
       ]
     }

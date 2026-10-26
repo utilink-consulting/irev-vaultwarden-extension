@@ -1,0 +1,397 @@
+// FIXME: Update this file to be type safe and remove this and next line
+// @ts-strict-ignore
+import { distinctUntilChanged, firstValueFrom, map, Observable, of, switchMap } from "rxjs";
+import { Jsonify } from "type-fest";
+
+import { AccountService } from "../../auth/abstractions/account.service";
+import { UserId } from "../../types/guid";
+import {
+  EnvironmentService,
+  Environment,
+  Region,
+  RegionConfig,
+  Urls,
+  CloudRegion,
+} from "../abstractions/environment.service";
+import { Utils } from "../misc/utils";
+import {
+  ENVIRONMENT_DISK,
+  ENVIRONMENT_MEMORY,
+  GlobalState,
+  KeyDefinition,
+  StateProvider,
+  UserKeyDefinition,
+} from "../state";
+
+export class EnvironmentUrls {
+  base: string = null;
+  api: string = null;
+  identity: string = null;
+  icons: string = null;
+  notifications: string = null;
+  events: string = null;
+  webVault: string = null;
+  keyConnector: string = null;
+  send: string = null;
+}
+
+class EnvironmentState {
+  region: Region;
+  urls: EnvironmentUrls;
+
+  static fromJSON(obj: Jsonify<EnvironmentState>): EnvironmentState {
+    return Object.assign(new EnvironmentState(), obj);
+  }
+}
+
+export const GLOBAL_ENVIRONMENT_KEY = new KeyDefinition<EnvironmentState>(
+  ENVIRONMENT_DISK,
+  "environment",
+  {
+    deserializer: EnvironmentState.fromJSON,
+  },
+);
+
+export const USER_ENVIRONMENT_KEY = new UserKeyDefinition<EnvironmentState>(
+  ENVIRONMENT_DISK,
+  "environment",
+  {
+    deserializer: EnvironmentState.fromJSON,
+    clearOn: ["logout"],
+  },
+);
+
+export const GLOBAL_CLOUD_REGION_KEY = new KeyDefinition<CloudRegion>(
+  ENVIRONMENT_MEMORY,
+  "cloudRegion",
+  {
+    deserializer: (b) => b,
+  },
+);
+
+export const USER_CLOUD_REGION_KEY = new UserKeyDefinition<CloudRegion>(
+  ENVIRONMENT_MEMORY,
+  "cloudRegion",
+  {
+    deserializer: (b) => b,
+    clearOn: ["logout"],
+  },
+);
+
+/**
+ * The iRevolution Vaultwarden server (the only region available).
+ *
+ * In the future we desire to load these urls from the config endpoint.
+ */
+export const PRODUCTION_REGIONS: RegionConfig[] = [
+  {
+    key: Region.US,
+    domain: "vaultwarden.sunderland.irevolution.group",
+    urls: {
+      base: null,
+      api: "https://vaultwarden.sunderland.irevolution.group/api",
+      identity: "https://vaultwarden.sunderland.irevolution.group/identity",
+      icons: "https://vaultwarden.sunderland.irevolution.group/icons",
+      webVault: "https://vaultwarden.sunderland.irevolution.group",
+      notifications: "https://vaultwarden.sunderland.irevolution.group/notifications",
+      events: "https://vaultwarden.sunderland.irevolution.group/events",
+      scim: null,
+      send: "https://vaultwarden.sunderland.irevolution.group",
+    },
+  },
+];
+
+/**
+ * The default region when starting the app.
+ */
+const DEFAULT_REGION = Region.US;
+
+/**
+ * The default region configuration.
+ */
+const DEFAULT_REGION_CONFIG = PRODUCTION_REGIONS.find((r) => r.key === DEFAULT_REGION);
+
+export class DefaultEnvironmentService implements EnvironmentService {
+  private globalState: GlobalState<EnvironmentState | null>;
+  private globalCloudRegionState: GlobalState<CloudRegion | null>;
+
+  // We intentionally don't want the helper on account service, we want the null back if there is no active user
+  private activeAccountId$: Observable<UserId | null> = this.accountService.activeAccount$.pipe(
+    map((a) => a?.id),
+  );
+
+  environment$: Observable<Environment>;
+  globalEnvironment$: Observable<Environment>;
+  cloudWebVaultUrl$: Observable<string>;
+
+  constructor(
+    private stateProvider: StateProvider,
+    private accountService: AccountService,
+    private additionalRegionConfigs: RegionConfig[] = [],
+  ) {
+    this.globalState = this.stateProvider.getGlobal(GLOBAL_ENVIRONMENT_KEY);
+    this.globalCloudRegionState = this.stateProvider.getGlobal(GLOBAL_CLOUD_REGION_KEY);
+
+    const account$ = this.activeAccountId$.pipe(
+      // Use == here to not trigger on undefined -> null transition
+      distinctUntilChanged((oldUserId: UserId, newUserId: UserId) => oldUserId == newUserId),
+    );
+
+    this.globalEnvironment$ = this.stateProvider
+      .getGlobal(GLOBAL_ENVIRONMENT_KEY)
+      .state$.pipe(map((state) => this.buildEnvironment(state?.region, state?.urls)));
+
+    // The current environment emitted by environment$ can come from two sources: the "global" environment,
+    // which represents the environment used by the application before a user authenticates, and the "user" environment,
+    // which represents the environment of an authenticated account using the application.
+    // We preference the user environment, only falling back to the global environment if a user is not logged in.
+    // However, there does exist the possibility that - due to timing of state updates - the active userId state may
+    // be cleared after the user environment state.
+    // To handle this, we fall back to the global state as a last resort, if the user state is not set.
+    const globalEnvState$ = this.stateProvider.getGlobal(GLOBAL_ENVIRONMENT_KEY).state$;
+    this.environment$ = account$.pipe(
+      switchMap((userId) => {
+        if (!userId) {
+          return globalEnvState$;
+        }
+        return this.stateProvider
+          .getUser(userId, USER_ENVIRONMENT_KEY)
+          .state$.pipe(
+            switchMap((userState) => (userState != null ? of(userState) : globalEnvState$)),
+          );
+      }),
+      map((state) => {
+        return this.buildEnvironment(state?.region, state?.urls);
+      }),
+    );
+    const globalCloudRegionState$ = this.stateProvider.getGlobal(GLOBAL_CLOUD_REGION_KEY).state$;
+    this.cloudWebVaultUrl$ = account$.pipe(
+      switchMap((userId) => {
+        if (!userId) {
+          return globalCloudRegionState$;
+        }
+        return this.stateProvider
+          .getUser(userId, USER_CLOUD_REGION_KEY)
+          .state$.pipe(
+            switchMap((userState) => (userState != null ? of(userState) : globalCloudRegionState$)),
+          );
+      }),
+      map((region) => {
+        if (region != null) {
+          const config = this.getRegionConfig(region);
+
+          if (config != null) {
+            return config.urls.webVault;
+          }
+        }
+        return DEFAULT_REGION_CONFIG.urls.webVault;
+      }),
+    );
+  }
+
+  availableRegions(): RegionConfig[] {
+    return PRODUCTION_REGIONS.concat(this.additionalRegionConfigs);
+  }
+
+  /**
+   * Get the region configuration for the given region.
+   */
+  private getRegionConfig(region: Region): RegionConfig | undefined {
+    return this.availableRegions().find((r) => r.key === region);
+  }
+
+  async setEnvironment(_region: Region, _urls?: Urls): Promise<Urls> {
+    // The server is fixed; changing it is not supported.
+    return null;
+  }
+
+  /**
+   * Helper for building the environment from state. Performs some general sanitization to avoid invalid regions and urls.
+   */
+  protected buildEnvironment(_region: Region, _urls: Urls) {
+    // The server is fixed to the iRevolution Vaultwarden instance; stored state is ignored.
+    return new CloudEnvironment(DEFAULT_REGION_CONFIG);
+  }
+
+  async setCloudRegion(userId: UserId | null, region: CloudRegion) {
+    if (userId == null) {
+      await this.globalCloudRegionState.update(() => region);
+    } else {
+      await this.stateProvider.getUser(userId, USER_CLOUD_REGION_KEY).update(() => region);
+    }
+  }
+
+  getEnvironment$(userId: UserId): Observable<Environment> {
+    return this.stateProvider.getUser(userId, USER_ENVIRONMENT_KEY).state$.pipe(
+      map((state) => {
+        return this.buildEnvironment(state?.region, state?.urls);
+      }),
+    );
+  }
+
+  /**
+   * @deprecated Use getEnvironment$ instead.
+   */
+  async getEnvironment(userId?: UserId): Promise<Environment | undefined> {
+    // Add backwards compatibility support for null userId
+    const definedUserId = userId ?? (await firstValueFrom(this.activeAccountId$));
+
+    return firstValueFrom(this.getEnvironment$(definedUserId));
+  }
+
+  async seedUserEnvironment(userId: UserId) {
+    const global = await firstValueFrom(this.globalState.state$);
+    await this.stateProvider.getUser(userId, USER_ENVIRONMENT_KEY).update(() => global);
+  }
+}
+
+abstract class UrlEnvironment implements Environment {
+  constructor(
+    protected region: Region,
+    protected urls: Urls,
+  ) {
+    // Scim is always null for self-hosted
+    if (region == Region.SelfHosted) {
+      this.urls.scim = null;
+    }
+  }
+
+  abstract getHostname(): string;
+
+  getRegion() {
+    return this.region;
+  }
+
+  getUrls() {
+    return {
+      base: this.urls.base,
+      webVault: this.urls.webVault,
+      api: this.urls.api,
+      identity: this.urls.identity,
+      icons: this.urls.icons,
+      notifications: this.urls.notifications,
+      events: this.urls.events,
+      keyConnector: this.urls.keyConnector,
+      scim: this.urls.scim,
+      send: this.urls.send,
+    };
+  }
+
+  hasBaseUrl() {
+    return this.urls.base != null;
+  }
+
+  getWebVaultUrl() {
+    return this.getUrl("webVault", "");
+  }
+
+  getApiUrl() {
+    return this.getUrl("api", "/api");
+  }
+
+  getEventsUrl() {
+    return this.getUrl("events", "/events");
+  }
+
+  getIconsUrl() {
+    return this.getUrl("icons", "/icons");
+  }
+
+  getIdentityUrl() {
+    return this.getUrl("identity", "/identity");
+  }
+
+  getKeyConnectorUrl() {
+    return this.urls.keyConnector;
+  }
+
+  getNotificationsUrl() {
+    return this.getUrl("notifications", "/notifications");
+  }
+
+  getScimUrl() {
+    if (this.urls.scim != null) {
+      return this.urls.scim + "/v2";
+    }
+
+    return this.getWebVaultUrl() + "/scim/v2";
+  }
+
+  getSendUrl() {
+    if (this.urls.send != null) {
+      // Bitwarden production US cloud environment uses a web page on a vanity url
+      // to redirect to the correct full send path
+      if (this.urls.send === "https://send.bitwarden.com") {
+        return this.urls.send + "/#";
+      }
+
+      // If using a custom send url with full send path, don't modify anything and return it
+      if (this.urls.send.endsWith("/#/send/")) {
+        return this.urls.send;
+      }
+
+      // If using a custom send url with just the domain, complete the send url path
+      return this.urls.send + "/#/send/";
+    }
+    // This line is only reached by self-hosted environments (or lower Bitwarden environments)
+    // that don't use a custom domain
+    return this.getWebVaultUrl() + "/#/send/";
+  }
+
+  /**
+   * Presume that if the region is not self-hosted, it is cloud.
+   */
+  isCloud(): boolean {
+    return this.region !== Region.SelfHosted;
+  }
+
+  /**
+   * Helper for getting an URL.
+   *
+   * @param key Key of the URL to get from URLs
+   * @param baseSuffix Suffix to append to the base URL if the url is not set
+   * @returns
+   */
+  private getUrl(key: keyof Urls, baseSuffix: string) {
+    if (this.urls[key] != null) {
+      return this.urls[key];
+    }
+
+    if (this.urls.base) {
+      return this.urls.base + baseSuffix;
+    }
+
+    // For self-hosted environments, try to use webVault URL as base before falling back to production
+    if (this.region === Region.SelfHosted && this.urls.webVault) {
+      return this.urls.webVault + baseSuffix;
+    }
+
+    return DEFAULT_REGION_CONFIG.urls[key];
+  }
+}
+
+/**
+ * Denote a cloud environment.
+ */
+export class CloudEnvironment extends UrlEnvironment {
+  constructor(private config: RegionConfig) {
+    super(config.key, config.urls);
+  }
+
+  /**
+   * Cloud always returns nice urls, i.e. bitwarden.com instead of vault.bitwarden.com.
+   */
+  getHostname() {
+    return this.config.domain;
+  }
+}
+
+export class SelfHostedEnvironment extends UrlEnvironment {
+  constructor(urls: Urls) {
+    super(Region.SelfHosted, urls);
+  }
+
+  getHostname() {
+    return Utils.getHost(this.getWebVaultUrl());
+  }
+}

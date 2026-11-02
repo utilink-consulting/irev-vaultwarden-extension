@@ -12,14 +12,8 @@ import { LinkModule } from "@bitwarden/components";
 // eslint-disable-next-line @angular-eslint/prefer-on-push-component-change-detection
 @Component({
   imports: [CommonModule, JslibModule, LinkModule, RouterModule],
-  template: `
-    <div class="tw-text-center" *ngIf="!(isUserRegistrationDisabled$ | async)">
-      {{ "newToBitwarden" | i18n }}
-      <a bitLink routerLink="/signup" data-testid="login-create-account-link">{{
-        "createAccount" | i18n
-      }}</a>
-    </div>
-  `,
+  // iRev Vaultwarden: self-service sign-up link removed (accounts are created by IT).
+  template: ``,
 })
 export class LoginSecondaryContentComponent {
   serverSettingsService = inject(DefaultServerSettingsService);

@@ -44,38 +44,7 @@
         {{ "continue" | i18n }}
       </button>
 
-      <div class="tw-text-center">{{ "or" | i18n }}</div>
-
-      <!-- Button to Login with Passkey -->
-      <ng-container *ngIf="isLoginWithPasskeySupported()">
-        <button
-          type="button"
-          bitButton
-          block
-          buttonType="secondary"
-          data-testid="login-with-passkey-button"
-          (click)="handleLoginWithPasskeyClick()"
-          [bitTooltip]="ssoRequired ? ('yourOrganizationRequiresSingleSignOn' | i18n) : ''"
-          [addTooltipToDescribedby]="ssoRequired"
-          [disabled]="ssoRequired"
-        >
-          <bit-icon name="bwi-passkey" class="tw-mr-1"></bit-icon>
-          {{ "logInWithPasskey" | i18n }}
-        </button>
-      </ng-container>
-
-      <!-- Button to Login with SSO -->
-      <button
-        type="button"
-        bitButton
-        block
-        [buttonType]="ssoRequired ? 'primary' : 'secondary'"
-        data-testid="login-sso-button"
-        (click)="handleSsoClick()"
-      >
-        <bit-icon name="bwi-provider" class="tw-mr-1"></bit-icon>
-        {{ "useSingleSignOn" | i18n }}
-      </button>
+      <!-- iRev Vaultwarden: passkey and single sign-on login buttons removed (email + password only). -->
     </div>
   </div>
 
@@ -113,22 +82,7 @@
         {{ "logIn" | i18n }}
       </button>
 
-      <!-- Button to Login with Device -->
-      <ng-container *ngIf="isKnownDevice">
-        <div class="tw-text-center">{{ "or" | i18n }}</div>
-
-        <button
-          type="button"
-          bitButton
-          block
-          buttonType="secondary"
-          data-testid="login-with-device-button"
-          (click)="startAuthRequestLogin()"
-        >
-          <bit-icon name="bwi-mobile"></bit-icon>
-          {{ "loginWithDevice" | i18n }}
-        </button>
-      </ng-container>
+      <!-- iRev Vaultwarden: 'Log in with device' removed. -->
 
       <!-- Back button -->
       <ng-container *ngIf="shouldShowBackButton()">
